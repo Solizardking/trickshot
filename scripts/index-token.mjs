@@ -46,9 +46,18 @@ for (const name of [".env.local", ".env"]) {
   }
 }
 
+const USAGE = [
+  "usage: npm run index -- <mint> [<mint>…] [options]",
+  "",
+  "  --wallets a,b  linked wallets for these addresses",
+  "  --include a,b  pin these wallets onto the board",
+  "  --top N        also graph the top N and bottom N of the board",
+  "  --update       re-read the board even if one is cached",
+  "  --retries N    attempts per step before giving up (default 3)",
+].join("\n");
+
 /** Flags that take a value, so the parser knows what to consume next. */
 const VALUE_FLAGS = new Set(["--wallets", "--include", "--top", "--retries"]);
-const BOOL_FLAGS = new Set(["--update", "--help"]);
 
 const argv = process.argv.slice(2);
 const mints = [];
@@ -60,59 +69,46 @@ let retries = 3;
 
 function fail(message) {
   console.error(`index-token: ${message}`);
-  console.error("run `npm run index -- --help` for usage");
+  console.error(USAGE);
   process.exit(1);
 }
+
+const csv = (value) => value.split(",").map((w) => w.trim()).filter(Boolean);
 
 for (let i = 0; i < argv.length; i++) {
   const arg = argv[i];
   if (arg === "--help" || arg === "-h") {
-    console.log(
-      [
-        "usage: npm run index -- <mint> [<mint>…] [options]",
-        "",
-        "  --wallets a,b  linked wallets for these addresses",
-        "  --include a,b  pin these wallets onto the board",
-        "  --top N        also graph the top N and bottom N of the board",
-        "  --update       re-read the board even if one is cached",
-        "  --retries N    attempts per step before giving up (default 3)",
-      ].join("\n"),
-    );
+    console.log(USAGE);
     process.exit(0);
   }
-  if (VALUE_FLAGS.has(arg)) {
-    const value = argv[++i];
-    if (value === undefined || value.startsWith("--")) {
-      fail(`${arg} needs a value`);
-    }
-    const parts = value.split(",").map((w) => w.trim()).filter(Boolean);
-    if (arg === "--wallets") named.push(...parts);
-    else if (arg === "--include") pinned.push(...parts);
-    else {
-      const n = Number(parts[0]);
-      if (!Number.isInteger(n) || n < 0) fail(`--top wants a whole number, got "${parts[0]}"`);
-      topN = n;
-      if (parts.length > 1) fail(`${arg} takes one value`);
-      if (arg === "--retries") {
-        const r = Number(parts[0]);
-        if (!Number.isInteger(r) || r < 1) fail(`--retries wants a positive whole number`);
-        retries = r;
-      }
-    }
+  if (!arg.startsWith("--")) {
+    mints.push(arg);
     continue;
   }
-  if (BOOL_FLAGS.has(arg)) {
-    if (arg === "--update") wantsUpdate = true;
-    continue;
-  }
-  if (arg.startsWith("--")) fail(`unknown flag ${arg}`);
-  mints.push(arg);
-}
+  if (!VALUE_FLAGS.has(arg)) fail(`unknown flag ${arg}`);
 
-const dedupe = (list, what) => [...new Set(list)];
-const uniqueMints = dedupe(mints);
+  const value = argv[++i];
+  if (value === undefined || value.startsWith("--")) fail(`${arg} needs a value`);
+
+  if (arg === "--top") {
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 0) fail(`--top wants a whole number, got "${value}"`);
+    topN = n;
+  } else if (arg === "--retries") {
+    const r = Number(value);
+    if (!Number.isInteger(r) || r < 1) fail(`--retries wants a positive whole number`);
+    retries = r;
+  } else if (arg === "--wallets") {
+    named.push(...csv(value));
+  } else {
+    pinned.push(...csv(value));
+  }
+}
+if (argv.includes("--update")) wantsUpdate = true;
+
+const uniqueMints = [...new Set(mints)];
 if (uniqueMints.length === 0) {
-  console.error("usage: npm run index -- <mint> [--wallets a,b] [--include a,b] [--top N] [--update]");
+  console.error(USAGE);
   process.exit(1);
 }
 if (mints.length !== uniqueMints.length) {
@@ -123,8 +119,8 @@ if (mints.length !== uniqueMints.length) {
 // pasted URL or a typo before it turns into minutes of reading an empty pool.
 const isAddress = (value) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value);
 for (const bad of uniqueMints.filter((m) => !isAddress(m))) fail(`not a Solana address: ${bad}`);
-for (const bad of dedupe(named).filter((w) => !isAddress(w))) fail(`--wallets: not a Solana address: ${bad}`);
-for (const bad of dedupe(pinned).filter((w) => !isAddress(w))) fail(`--include: not a Solana address: ${bad}`);
+for (const bad of [...new Set(named)].filter((w) => !isAddress(w))) fail(`--wallets: not a Solana address: ${bad}`);
+for (const bad of [...new Set(pinned)].filter((w) => !isAddress(w))) fail(`--include: not a Solana address: ${bad}`);
 
 if (!process.env.HELIUS_API_KEY) {
   console.error("HELIUS_API_KEY is not set. Put it in .env.local.");
@@ -147,7 +143,13 @@ const started = Date.now();
 for (const mint of uniqueMints) {
   console.log(`\n${mint}`);
 
-  const chart = await step("chart", () => engine.reconstruct(mint));
+  let chart;
+  try {
+    chart = await step("chart", () => engine.reconstruct(mint));
+  } catch (error) {
+    failures.push(`${mint} chart: ${error.message}`);
+    continue;
+  }
   if (!chart) {
     console.log("  no pool found — nothing to index");
     continue;
@@ -158,12 +160,11 @@ for (const mint of uniqueMints) {
 
   let board = null;
   try {
-    board = await engine.traderBoard(mint, wantsUpdate, pinned);
+    board = await step("board", () => engine.traderBoard(mint, wantsUpdate, pinned));
+    if (board) console.log(`        ${board.wallets} wallets ranked`);
   } catch (error) {
     failures.push(`${mint} board: ${error.message}`);
-    console.log(`        board failed: ${error.message}`);
   }
-  if (board) console.log(`        ${board.wallets} wallets ranked`);
 
   // Anything pinned is worth a graph too — you named it for a reason.
   const wallets = new Set([...named, ...pinned]);
@@ -173,22 +174,26 @@ for (const mint of uniqueMints) {
   }
   for (const wallet of wallets) {
     try {
-      const report = await engine.relatedWallets(mint, wallet);
+      const report = await step(`links ${short(wallet)}`, () =>
+        engine.relatedWallets(mint, wallet),
+      );
       const linked = report && report !== "not computed" ? report.linked.length : 0;
-      console.log(`        ${linked} linked (${wallet.slice(0, 8)}…)`); 
+      console.log(`        ${linked} linked`);
     } catch (error) {
       failures.push(`${mint} links ${wallet}: ${error.message}`);
-      console.log(`        links ${wallet.slice(0, 8)}… failed: ${error.message}`);
     }
   }
 }
 
-const seconds = Math.round((Date.now() - started) / 1000);
-console.log(`\nDone in ${seconds}s across ${uniqueMints.length} token(s).`);
+console.log(`\nDone in ${Math.round((Date.now() - started) / 1000)}s across ${uniqueMints.length} token(s).`);
 if (failures.length > 0) {
   console.log("\nFailed steps:");
   for (const f of failures) console.log(`  - ${f}`);
   process.exitCode = 1;
+}
+
+function short(address) {
+  return `${address.slice(0, 8)}…`;
 }
 
 /**
@@ -201,7 +206,7 @@ if (failures.length > 0) {
 async function step(label, run) {
   const at = Date.now();
   process.stdout.write(`  ${label.padEnd(20)}`);
-  let lastError = null;
+  let lastError;
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -218,5 +223,5 @@ async function step(label, run) {
   }
 
   process.stdout.write(`  failed after ${retries}: ${lastError?.message}\n`);
-  return null;
+  throw lastError;
 }

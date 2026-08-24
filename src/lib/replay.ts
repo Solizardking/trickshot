@@ -234,3 +234,33 @@ export async function fetchRelated(
   if (!res.ok) return { ...body, error: body.error ?? `error ${res.status}` };
   return body;
 }
+
+/** One fungible position in a wallet, in whole tokens. */
+export interface WalletHolding {
+  mint: string;
+  name?: string;
+  symbol?: string;
+  image?: string;
+  amount: number;
+  decimals: number;
+}
+
+export interface WalletTokens {
+  wallet: string;
+  tokens: WalletHolding[];
+  error?: string;
+}
+
+/** Everything a wallet holds, so a session can start from "my own bag". */
+export async function fetchWalletTokens(wallet: string): Promise<WalletTokens | null> {
+  try {
+    const res = await fetch(`/api/wallet?address=${encodeURIComponent(wallet)}`, {
+      cache: "no-store",
+    });
+    const body = (await res.json()) as WalletTokens;
+    if (!res.ok) return { ...body, tokens: [], error: body.error ?? `error ${res.status}` };
+    return body;
+  } catch {
+    return null;
+  }
+}
