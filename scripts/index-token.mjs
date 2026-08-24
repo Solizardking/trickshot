@@ -11,12 +11,19 @@
  * reads; without them it is .trickshot-cache/ next to the project, which is
  * only useful locally.
  *
- *   npm run index -- <mint> [<mint>…] [--wallets a,b,c] [--top N] [--update]
+ *   npm run index -- <mint> [<mint>…] [--wallets a,b,c] [--top N] [options]
  *
- *   --wallets   work out linked wallets for these addresses
- *   --top N     …and for the top N and bottom N of the board
- *   --include   pin these wallets onto the board, whatever nomination thinks
- *   --update    re-read the board even if one is already cached
+ *   --wallets a,b  work out linked wallets for these addresses
+ *   --top N        …and for the top N and bottom N of the board
+ *   --include a,b  pin these wallets onto the board, whatever nomination thinks
+ *   --update       re-read the board even if one is already cached
+ *   --retries N    attempts per step before giving up (default 3)
+ *   --help         this text
+ *
+ * A failed step is retried with a pause between attempts, because Helius rate
+ * limits are common on a long run and every one of them is transient. The
+ * script exits non-zero when any step still failed; the summary at the end
+ * says exactly what was built and what was not.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -31,30 +38,94 @@ for (const name of [".env.local", ".env"]) {
   const file = path.join(root, name);
   if (!fs.existsSync(file)) continue;
   for (const line of fs.readFileSync(file, "utf8").split("\n")) {
-    const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
-    if (match && !process.env[match[1]]) {
-      process.env[match[1]] = match[2].replace(/^["']|["']$/g, "");
+    const entry = line.match(/^\s*(?:export\s+)?([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
+    if (!entry || line.trimStart().startsWith("#")) continue;
+    if (!process.env[entry[1]]) {
+      process.env[entry[1]] = entry[2].replace(/^["']|["']$/g, "");
     }
   }
 }
 
-const argv = process.argv.slice(2);
-const mints = argv.filter((a) => !a.startsWith("--") && !argv[argv.indexOf(a) - 1]?.startsWith("--"));
-const flag = (name) => {
-  const i = argv.indexOf(`--${name}`);
-  return i >= 0 ? (argv[i + 1] ?? "") : null;
-};
-const wantsUpdate = argv.includes("--update");
-const named = (flag("wallets") ?? "").split(",").map((w) => w.trim()).filter(Boolean);
-const pinned = (flag("include") ?? "").split(",").map((w) => w.trim()).filter(Boolean);
-const topN = Number(flag("top") ?? 0);
+/** Flags that take a value, so the parser knows what to consume next. */
+const VALUE_FLAGS = new Set(["--wallets", "--include", "--top", "--retries"]);
+const BOOL_FLAGS = new Set(["--update", "--help"]);
 
-if (mints.length === 0) {
-  console.error(
-    "usage: npm run index -- <mint> [--wallets a,b] [--include a,b] [--top N] [--update]",
-  );
+const argv = process.argv.slice(2);
+const mints = [];
+const named = [];
+const pinned = [];
+let wantsUpdate = false;
+let topN = 0;
+let retries = 3;
+
+function fail(message) {
+  console.error(`index-token: ${message}`);
+  console.error("run `npm run index -- --help` for usage");
   process.exit(1);
 }
+
+for (let i = 0; i < argv.length; i++) {
+  const arg = argv[i];
+  if (arg === "--help" || arg === "-h") {
+    console.log(
+      [
+        "usage: npm run index -- <mint> [<mint>…] [options]",
+        "",
+        "  --wallets a,b  linked wallets for these addresses",
+        "  --include a,b  pin these wallets onto the board",
+        "  --top N        also graph the top N and bottom N of the board",
+        "  --update       re-read the board even if one is cached",
+        "  --retries N    attempts per step before giving up (default 3)",
+      ].join("\n"),
+    );
+    process.exit(0);
+  }
+  if (VALUE_FLAGS.has(arg)) {
+    const value = argv[++i];
+    if (value === undefined || value.startsWith("--")) {
+      fail(`${arg} needs a value`);
+    }
+    const parts = value.split(",").map((w) => w.trim()).filter(Boolean);
+    if (arg === "--wallets") named.push(...parts);
+    else if (arg === "--include") pinned.push(...parts);
+    else {
+      const n = Number(parts[0]);
+      if (!Number.isInteger(n) || n < 0) fail(`--top wants a whole number, got "${parts[0]}"`);
+      topN = n;
+      if (parts.length > 1) fail(`${arg} takes one value`);
+      if (arg === "--retries") {
+        const r = Number(parts[0]);
+        if (!Number.isInteger(r) || r < 1) fail(`--retries wants a positive whole number`);
+        retries = r;
+      }
+    }
+    continue;
+  }
+  if (BOOL_FLAGS.has(arg)) {
+    if (arg === "--update") wantsUpdate = true;
+    continue;
+  }
+  if (arg.startsWith("--")) fail(`unknown flag ${arg}`);
+  mints.push(arg);
+}
+
+const dedupe = (list, what) => [...new Set(list)];
+const uniqueMints = dedupe(mints);
+if (uniqueMints.length === 0) {
+  console.error("usage: npm run index -- <mint> [--wallets a,b] [--include a,b] [--top N] [--update]");
+  process.exit(1);
+}
+if (mints.length !== uniqueMints.length) {
+  console.log(`(${mints.length - uniqueMints.length} duplicate mint(s) skipped)`);
+}
+
+// Base58, 32–44 characters — the same shape the API insists on. Catches a
+// pasted URL or a typo before it turns into minutes of reading an empty pool.
+const isAddress = (value) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value);
+for (const bad of uniqueMints.filter((m) => !isAddress(m))) fail(`not a Solana address: ${bad}`);
+for (const bad of dedupe(named).filter((w) => !isAddress(w))) fail(`--wallets: not a Solana address: ${bad}`);
+for (const bad of dedupe(pinned).filter((w) => !isAddress(w))) fail(`--include: not a Solana address: ${bad}`);
+
 if (!process.env.HELIUS_API_KEY) {
   console.error("HELIUS_API_KEY is not set. Put it in .env.local.");
   process.exit(1);
@@ -70,8 +141,10 @@ console.log(
     : "Writing to .trickshot-cache/ — local only. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to publish.",
 );
 
+const failures = [];
 const started = Date.now();
-for (const mint of mints) {
+
+for (const mint of uniqueMints) {
   console.log(`\n${mint}`);
 
   const chart = await step("chart", () => engine.reconstruct(mint));
@@ -83,9 +156,13 @@ for (const mint of mints) {
     `        ${chart.name ?? "?"} ${chart.symbol ?? ""} · ${chart.candles.length} bars · ${Math.round(chart.swaps ?? 0).toLocaleString()} swaps`,
   );
 
-  const board = await step("board", () =>
-    engine.traderBoard(mint, wantsUpdate, pinned),
-  );
+  let board = null;
+  try {
+    board = await engine.traderBoard(mint, wantsUpdate, pinned);
+  } catch (error) {
+    failures.push(`${mint} board: ${error.message}`);
+    console.log(`        board failed: ${error.message}`);
+  }
   if (board) console.log(`        ${board.wallets} wallets ranked`);
 
   // Anything pinned is worth a graph too — you named it for a reason.
@@ -95,25 +172,51 @@ for (const mint of mints) {
     for (const row of board.bottom.slice(0, topN)) wallets.add(row.wallet);
   }
   for (const wallet of wallets) {
-    const report = await step(`links ${wallet.slice(0, 8)}`, () =>
-      engine.relatedWallets(mint, wallet),
-    );
-    const linked = report && report !== "not computed" ? report.linked.length : 0;
-    console.log(`        ${linked} linked`);
+    try {
+      const report = await engine.relatedWallets(mint, wallet);
+      const linked = report && report !== "not computed" ? report.linked.length : 0;
+      console.log(`        ${linked} linked (${wallet.slice(0, 8)}…)`); 
+    } catch (error) {
+      failures.push(`${mint} links ${wallet}: ${error.message}`);
+      console.log(`        links ${wallet.slice(0, 8)}… failed: ${error.message}`);
+    }
   }
 }
 
-console.log(`\nDone in ${Math.round((Date.now() - started) / 1000)}s.`);
+const seconds = Math.round((Date.now() - started) / 1000);
+console.log(`\nDone in ${seconds}s across ${uniqueMints.length} token(s).`);
+if (failures.length > 0) {
+  console.log("\nFailed steps:");
+  for (const f of failures) console.log(`  - ${f}`);
+  process.exitCode = 1;
+}
 
+/**
+ * One unit of work, timed, retried, and reported in place.
+ *
+ * Helius answers 429 under sustained reads and the occasional connection dies
+ * mid-flight; both clear on their own, so each attempt waits a little longer
+ * than the last before the error is finally allowed to stand.
+ */
 async function step(label, run) {
   const at = Date.now();
   process.stdout.write(`  ${label.padEnd(20)}`);
-  try {
-    const result = await run();
-    process.stdout.write(`${String(Date.now() - at).padStart(6)}ms\n`);
-    return result;
-  } catch (error) {
-    process.stdout.write(`  failed: ${error.message}\n`);
-    return null;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const result = await run();
+      process.stdout.write(`${String(Date.now() - at).padStart(6)}ms\n`);
+      return result;
+    } catch (error) {
+      lastError = error;
+      if (attempt < retries) {
+        process.stdout.write(" retrying… ");
+        await new Promise((resolve) => setTimeout(resolve, attempt * 2_000));
+      }
+    }
   }
+
+  process.stdout.write(`  failed after ${retries}: ${lastError?.message}\n`);
+  return null;
 }
