@@ -87,6 +87,26 @@ function barLabel(sec: number): string {
   if (sec >= 60) return `${Math.round(sec / 60)}m`;
   return `${Math.round(sec)}s`;
 }
+/**
+ * Draw an image across the whole canvas, cropped the way CSS `cover` would.
+ *
+ * The recording is whatever size the chart happens to be and the picture is
+ * whatever was uploaded, so neither fits the other: scale by whichever axis
+ * needs more, centre the overflow, and the frame is always filled without
+ * stretching anything.
+ */
+function drawCover(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  width: number,
+  height: number,
+) {
+  const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight);
+  const w = image.naturalWidth * scale;
+  const h = image.naturalHeight * scale;
+  ctx.drawImage(image, (width - w) / 2, (height - h) / 2, w, h);
+}
+
 /** Pixels per bar. Fixed, so the replay scrolls instead of squeezing. */
 const BAR_SPACING = 9;
 /**
@@ -244,6 +264,47 @@ export function WalletReplay({
   /** Null when not recording; otherwise 0..1. */
   const [clipping, setClipping] = useState<number | null>(null);
   const abortClip = useRef(false);
+  /**
+   * An uploaded picture to sit behind the chart in the exported clip.
+   *
+   * Held as a decoded image for the recorder and an object URL for the live
+   * preview behind it. Session-only on purpose — pictures are far larger than
+   * localStorage allows, and picking one again costs nothing.
+   */
+  const [bg, setBg] = useState<{
+    image: HTMLImageElement;
+    url: string;
+    name: string;
+  } | null>(null);
+
+  const clearBg = useCallback(() => {
+    setBg((held) => {
+      if (held) URL.revokeObjectURL(held.url);
+      return null;
+    });
+  }, []);
+
+  // The URL belongs to this replay; drop it when the modal goes away.
+  useEffect(() => () => clearBg(), [clearBg]);
+
+  const pickBg = useCallback((file?: File) => {
+    if (!file?.type.startsWith("image/")) return;
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      setBg((held) => {
+        if (held) URL.revokeObjectURL(held.url);
+        return { image, url, name: file.name };
+      });
+    };
+    image.onerror = () => {
+      // A format the browser cannot decode (HEIC outside Safari, say) is
+      // simply refused rather than recorded as a blank ground.
+      URL.revokeObjectURL(url);
+    };
+    image.src = url;
+  }, []);
+
   /**
    * The playhead, readable from outside React's render cycle.
    *
@@ -814,9 +875,16 @@ export function WalletReplay({
            * the colour behind it — so a screenshot carries no ground of its
            * own. Drawn straight onto the previous frame, every bar stayed on
            * screen for the rest of the recording and the whole thing smeared.
+           *
+           * An uploaded picture takes the ground's place when one is set,
+           * cover-cropped to the frame exactly as the live preview shows it.
            */
-          ctx.fillStyle = "#0a0b0d";
-          ctx.fillRect(0, 0, width, height);
+          if (bg) {
+            drawCover(ctx, bg.image, width, height);
+          } else {
+            ctx.fillStyle = "#0a0b0d";
+            ctx.fillRect(0, 0, width, height);
+          }
           ctx.drawImage(a.chart.takeScreenshot(), 0, 0, width, height);
           drawFlashes(ctx, width, height);
         },
@@ -829,7 +897,7 @@ export function WalletReplay({
       setClipping(null);
       setPlaying(false);
     }
-  }, [data, drawFlashes, label, soundOn, wallet]);
+  }, [bg, data, drawFlashes, label, soundOn, wallet]);
 
   /**
    * Paint and play, in one loop.
@@ -995,7 +1063,18 @@ export function WalletReplay({
           </div>
         </div>
 
-        <div className="relative w-full">
+        <div
+          className="relative w-full"
+          style={
+            bg
+              ? {
+                  backgroundImage: `url(${bg.url})`,
+                  backgroundSize: "cover",
+                  backgroundPosition: "center",
+                }
+              : undefined
+          }
+        >
           <div ref={holder} className="w-full" style={{ height: 340 }} />
 
           {!data && (
@@ -1261,6 +1340,37 @@ export function WalletReplay({
           >
             fx
           </button>
+          <label
+            title="Use your own picture behind the chart in exported clips"
+            className={cx(
+              "cursor-pointer rounded-xs border px-2 py-1.5 font-mono text-[10px] tracking-[0.1em] uppercase",
+              bg
+                ? "border-amber/40 bg-amber/10 text-amber"
+                : "border-line-strong text-tx3 hover:text-tx2",
+            )}
+          >
+            {bg ? "bg image ✓" : "bg image"}
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                pickBg(e.target.files?.[0]);
+                // So picking the same file twice still fires.
+                e.target.value = "";
+              }}
+            />
+          </label>
+          {bg && (
+            <button
+              type="button"
+              onClick={clearBg}
+              title={`Stop using ${bg.name}`}
+              className="cursor-pointer rounded-xs border border-line-strong px-2 py-1.5 font-mono text-[10px] tracking-[0.1em] text-tx3 uppercase hover:text-tx2"
+            >
+              ✕
+            </button>
+          )}
           <button
             type="button"
             onClick={() => void exportClip()}
