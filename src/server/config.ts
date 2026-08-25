@@ -32,7 +32,11 @@ export const config = {
   },
   get rpcUrl(): string {
     const base = process.env.HELIUS_RPC_URL ?? "https://mainnet.helius-rpc.com";
-    return `${base}/?api-key=${required("HELIUS_API_KEY")}`;
+    const url = new URL(base);
+    if (!url.searchParams.has("api-key")) {
+      url.searchParams.set("api-key", required("HELIUS_API_KEY"));
+    }
+    return url.toString();
   },
   commitment: (process.env.COMMITMENT ?? "confirmed") as
     | "processed"
