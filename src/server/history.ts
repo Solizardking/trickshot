@@ -1,5 +1,4 @@
 import bs58 from "bs58";
-import { config } from "./config";
 import { normalizeTx, type NormalizedTx } from "./decode/normalizeTx";
 import {
   PositionBook,
@@ -27,6 +26,7 @@ import {
   tradeFilter,
   type Venue,
 } from "./pool";
+import { rpcPost } from "./rpc";
 import {
   builtTokens,
   loadBlob,
@@ -267,35 +267,25 @@ async function archive(
   /** "signatures" costs ten credits flat and a fraction of the bytes. */
   transactionDetails: "full" | "signatures" = "full",
 ): Promise<{ data: unknown[]; paginationToken?: string } | null> {
-  try {
-    const res = await fetch(config.rpcUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      signal: AbortSignal.timeout(25_000),
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: "history",
-        method: "getTransactionsForAddress",
-        // POSITIONAL params. The documented object form is rejected outright.
-        params: [
-          address,
-          {
-            transactionDetails,
-            sortOrder,
-            limit,
-            maxSupportedTransactionVersion: 0,
-            ...(filters ? { filters } : {}),
-            ...(paginationToken ? { paginationToken } : {}),
-          },
-        ],
-      }),
-    });
-    if (!res.ok) return null;
-    const body = (await res.json()) as { result?: { data: unknown[]; paginationToken?: string } };
-    return body.result ?? null;
-  } catch {
-    return null;
-  }
+  // Through the shared gate: a board build fires several hundred of these,
+  // and ungated they answered 429, which read as an empty page.
+  return rpcPost({
+    jsonrpc: "2.0",
+    id: "history",
+    method: "getTransactionsForAddress",
+    // POSITIONAL params. The documented object form is rejected outright.
+    params: [
+      address,
+      {
+        transactionDetails,
+        sortOrder,
+        limit,
+        maxSupportedTransactionVersion: 0,
+        ...(filters ? { filters } : {}),
+        ...(paginationToken ? { paginationToken } : {}),
+      },
+    ],
+  }, 25_000);
 }
 
 /**
@@ -592,19 +582,7 @@ async function tokenSupply(mint: string): Promise<number> {
 }
 
 async function rpc<T>(method: string, params: unknown[]): Promise<T | null> {
-  try {
-    const res = await fetch(config.rpcUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      signal: AbortSignal.timeout(20_000),
-      body: JSON.stringify({ jsonrpc: "2.0", id: "history", method, params }),
-    });
-    if (!res.ok) return null;
-    const body = (await res.json()) as { result?: T };
-    return body.result ?? null;
-  } catch {
-    return null;
-  }
+  return rpcPost<T>({ jsonrpc: "2.0", id: "history", method, params });
 }
 
 /**

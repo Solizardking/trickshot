@@ -1,6 +1,6 @@
 import { isProgramDerived } from "./address";
-import { config } from "./config";
 import { WSOL_MINT } from "./mints";
+import { rpcPost } from "./rpc";
 
 /**
  * Which book to draw the chart from, found by asking who holds the token.
@@ -38,21 +38,12 @@ export interface Venue {
  * `params` is passed through as given: standard RPC methods take a positional
  * array, and Helius's DAS methods take a single object. Wrapping a DAS object
  * in an array is rejected.
+ *
+ * Through the shared gate — venue ranking alone fires one request per pool —
+ * so a burst here cannot eat the budget the board's reads need afterwards.
  */
 async function rpc<T>(method: string, params: unknown): Promise<T | null> {
-  try {
-    const res = await fetch(config.rpcUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      signal: AbortSignal.timeout(20_000),
-      body: JSON.stringify({ jsonrpc: "2.0", id: "pool", method, params }),
-    });
-    if (!res.ok) return null;
-    const body = (await res.json()) as { result?: T };
-    return body.result ?? null;
-  } catch {
-    return null;
-  }
+  return rpcPost<T>({ jsonrpc: "2.0", id: "pool", method, params });
 }
 
 /**
