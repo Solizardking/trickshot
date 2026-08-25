@@ -1343,8 +1343,21 @@ export async function reconstruct(
   const venue = await stage("venue", () => venueFor(mint));
   if (!venue) return null;
 
-  const life = await stage("lifespan", () => poolLifespan(venue, mint));
-  if (!life) return null;
+  let life = await stage("lifespan", () => poolLifespan(venue, mint));
+  if (!life) {
+    /**
+     * The remembered span stands in when the pool cannot be asked.
+     *
+     * A token this page has drawn before already has its span recorded, and
+     * two throttled requests are not evidence that the pool never traded.
+     * MEASURED: with a full rebuild of another token hogging the RPC budget,
+     * this read failed, the whole reconstruction answered 404, and the page
+     * told the visitor the token did not exist.
+     */
+    const remembered = (await builtTokens()).find((t) => t.mint === mint);
+    if (!remembered?.firstTs || !remembered?.lastTs) return null;
+    life = { first: remembered.firstTs, last: remembered.lastTs };
+  }
   const firstTs = life.first;
   const lastTs = life.last;
   const interval = pickInterval(lastTs - firstTs);
