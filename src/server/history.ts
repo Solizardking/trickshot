@@ -1439,7 +1439,10 @@ export async function traderBoard(
   const state = await loadBlob<BoardState>(stateKey);
 
   const venue = await stage("venue", () => venueFor(mint));
-  if (!venue) return held ?? null;
+  if (!venue) {
+    console.warn(`[trickshot] board ${mint.slice(0, 6)}: no venue`);
+    return held ?? null;
+  }
 
   /**
    * Re-marked on every read, even without an update.
@@ -1475,7 +1478,10 @@ export async function traderBoard(
   }
 
   const life = await stage("lifespan", () => poolLifespan(venue, mint));
-  if (!life) return held ?? null;
+  if (!life) {
+    console.warn(`[trickshot] board ${mint.slice(0, 6)}: pool lifespan unread`);
+    return held ?? null;
+  }
   await sol.load(life.first, life.last);
 
   const interval = pickInterval(life.last - life.first);
@@ -1531,14 +1537,20 @@ export async function traderBoard(
   }
   // Pinned wallets survive the cap.
   for (const w of pinned) if (!candidates.includes(w)) candidates.push(w);
-  if (candidates.length === 0) return held ?? null;
+  if (candidates.length === 0) {
+    console.warn(`[trickshot] board ${mint.slice(0, 6)}: nominated nobody`);
+    return held ?? null;
+  }
 
   const { book, fills } = await stage("board", () =>
     exactBoard(mint, candidates, priceAt, carry),
   );
 
   histories.set(`${mint}|`, { book, fills, interval });
-  if (price <= 0) return held ?? null;
+  if (price <= 0) {
+    console.warn(`[trickshot] board ${mint.slice(0, 6)}: spot price unread`);
+    return held ?? null;
+  }
 
   const next: BoardState = {
     candidates,

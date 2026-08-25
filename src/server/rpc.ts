@@ -63,14 +63,16 @@ function release(): void {
 }
 
 /**
- * One JSON-RPC POST, gated and retried. Returns `result`, or null — the same
- * shape every caller here already handled, so adopting the gate changes
- * nothing about how a miss reads downstream.
+ * One gated, retried POST, returning the whole JSON body.
+ *
+ * For callers that must read more than `result` — the DAS index has shipped
+ * its payload at the top level under `assets` in one era and under `result` in
+ * another, and betting the page on which one today's is loses either way.
  */
-export async function rpcPost<T>(
+export async function rpcSend(
   body: Record<string, unknown>,
   timeoutMs = 20_000,
-): Promise<T | null> {
+): Promise<Record<string, unknown> | null> {
   for (let attempt = 0; ; attempt += 1) {
     let res: Response;
     try {
@@ -85,7 +87,10 @@ export async function rpcPost<T>(
       } finally {
         release();
       }
-    } catch {
+    } catch (error) {
+      console.warn(
+        `[trickshot] rpc ${String(body.method)} failed: ${error instanceof Error ? error.message : "network"}`,
+      );
       return null;
     }
 
@@ -102,12 +107,31 @@ export async function rpcPost<T>(
       continue;
     }
 
-    if (!res.ok) return null;
+    if (!res.ok) {
+      // A board build that fails quietly ranks empty and caches the emptiness,
+      // which reads to the page as "no trades found for this mint". Loud here
+      // costs nothing; silent cost a day of it.
+      console.warn(`[trickshot] rpc ${String(body.method)} answered ${res.status}`);
+      return null;
+    }
     try {
-      const json = (await res.json()) as { result?: T };
-      return json.result ?? null;
+      return (await res.json()) as Record<string, unknown>;
     } catch {
+      console.warn(`[trickshot] rpc ${String(body.method)} returned unparseable json`);
       return null;
     }
   }
+}
+
+/**
+ * One JSON-RPC POST, gated and retried. Returns `result`, or null — the same
+ * shape every caller here already handled, so adopting the gate changes
+ * nothing about how a miss reads downstream.
+ */
+export async function rpcPost<T>(
+  body: Record<string, unknown>,
+  timeoutMs = 20_000,
+): Promise<T | null> {
+  const json = await rpcSend(body, timeoutMs);
+  return (json?.result as T) ?? null;
 }
