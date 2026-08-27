@@ -10,7 +10,8 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "index": "node scripts/index-token.mjs"
+    "index": "node scripts/index-token.mjs",
+    "test": "vitest run src/server/rpc-url.test.ts"
   },
   "dependencies": {
     "@vercel/analytics": "^2.0.1",

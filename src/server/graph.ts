@@ -1,8 +1,8 @@
 import { isProgramDerived } from "./address";
-import { config } from "./config";
 import type { NormalizedTx } from "./decode/normalizeTx";
 import { identify } from "./identity";
 import { WSOL_MINT } from "./mints";
+import { rpcPost } from "./rpc";
 
 /**
  * The other wallets one wallet is operating with.
@@ -80,19 +80,7 @@ export interface WalletGraph {
 }
 
 async function rpc<T>(method: string, params: unknown): Promise<T | null> {
-  try {
-    const res = await fetch(config.rpcUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      signal: AbortSignal.timeout(20_000),
-      body: JSON.stringify({ jsonrpc: "2.0", id: "graph", method, params }),
-    });
-    if (!res.ok) return null;
-    const body = (await res.json()) as { result?: T };
-    return body.result ?? null;
-  } catch {
-    return null;
-  }
+  return rpcPost<T>({ jsonrpc: "2.0", id: "graph", method, params });
 }
 
 interface Edge {

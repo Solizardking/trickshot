@@ -1,4 +1,5 @@
 import { config } from "./config";
+import { rpcSend } from "./rpc";
 
 /**
  * Names for addresses, where Helius knows one.
@@ -108,28 +109,26 @@ export interface TokenIdentity {
  */
 export async function tokenIdentity(mint: string): Promise<TokenIdentity> {
   try {
-    const res = await fetch(config.rpcUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      signal: AbortSignal.timeout(15_000),
-      body: JSON.stringify({
+    const body = await rpcSend(
+      {
         jsonrpc: "2.0",
         id: "identity",
         method: "getAsset",
         params: { id: mint },
-      }),
-    });
-    if (!res.ok) return {};
-    const body = (await res.json()) as {
-      result?: {
-        content?: {
-          metadata?: { name?: string; symbol?: string };
-          links?: { image?: string };
-          files?: { uri?: string; cdn_uri?: string; mime?: string }[];
-        };
-      };
-    };
-    const content = body.result?.content;
+      },
+      15_000,
+    );
+    if (!body) return {};
+    const result = body.result as
+      | {
+          content?: {
+            metadata?: { name?: string; symbol?: string };
+            links?: { image?: string };
+            files?: { uri?: string; cdn_uri?: string; mime?: string }[];
+          };
+        }
+      | undefined;
+    const content = result?.content;
     /**
      * The CDN copy first, the original only as a fallback.
      *

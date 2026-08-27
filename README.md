@@ -11,12 +11,14 @@ Live: **[trickshot-memes.vercel.app](https://trickshot-memes.vercel.app)**
 
 ## Run it
 
-    cp .env.example .env.local     # add HELIUS_API_KEY
+    cp .env.example .env.local     # add Solana Tracker RPC credentials
     npm install
     npm run dev
 
-One key is all it needs, on a paid Helius plan — `getTransactionsForAddress`
-and the wallet-identity endpoint are not on the free tier. Everything else is
+JSON-RPC needs a Solana Tracker endpoint — `SECURE_RPC_URL` (preferred dedicated
+host), `SOLANA_TRACKER_RPC_URL`, or `SOLANA_TRACKER_API_KEY` /
+`SOLANA_TRACKER_ACCESS_KEY`. Wallet names still come from Helius identity REST
+when `HELIUS_API_KEY` is set; that call is not JSON-RPC. Everything else is
 optional.
 
 Paste a mint and press build. A busy token takes about ten seconds the first
@@ -35,9 +37,11 @@ Set `SUPABASE_URL` and `SUPABASE_KEY` and the cache moves to Supabase instead
 of the local directory, which is what a deployment reads from. See
 `.env.example` for the rest of the settings.
 
-## How it uses Helius
+## How it talks to the chain
 
-Four things, one key.
+JSON-RPC goes to **Solana Tracker**, authenticated with `api_key` on a
+`*.solanatracker.io` (or `*.rpc.solanatracker.io`) host. Prefer a dedicated
+Secure RPC URL when you have one.
 
 **`getTransactionsForAddress`** does the heavy lifting. Two details make the
 project possible at all:
@@ -56,22 +60,20 @@ that.
 **Standard RPC** — `getTokenLargestAccounts`, `getMultipleAccounts`,
 `getTokenSupply` — finds the pools and the holders.
 
-**DAS** (`getAsset`, `getTokenAccounts`) gives token names, artwork, and the full
-holder list. Use the `cdn_uri` it returns for images: token art is hosted
-wherever its creator put it and plenty of those hosts refuse to serve it to
-anyone else.
+**DAS** (`getAsset`, `searchAssets`) gives token names, artwork, and wallet
+holdings.
 
-**Wallet Identity** (`/v1/wallet/batch-identity`) puts names to addresses where
-it knows them — exchanges, protocols, a few thousand known traders.
+**Wallet Identity** is still Helius REST (`/v1/wallet/batch-identity`) when a
+Helius key is set. It puts names to addresses where it knows them — exchanges,
+protocols, a few thousand known traders — and is not JSON-RPC.
 
 Prices come from **balances**, never from decoding instructions. A swap is two
 balances moving in opposite directions inside one pool and the transaction
 states both, so it works for venues no decoder knows — and a wallet's own token
 delta cannot double-count a swap routed through three pools.
 
-The only thing not from Helius is **SOL/USD by the minute**, from Binance's
-public price mirror. A USD figure needs the SOL price at the time of the trade,
-and Helius has no price history.
+**SOL/USD by the minute** comes from Binance's public price mirror. A USD figure
+needs the SOL price at the time of the trade.
 
 ## What it does not do
 

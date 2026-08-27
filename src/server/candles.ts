@@ -1,5 +1,5 @@
-import { config } from "./config";
 import { countSwaps, expectedSwaps, type Density } from "./density";
+import { rpcSend } from "./rpc";
 import { accountKeys, tradeFilter, type TokenBalanceRow, type Venue } from "./pool";
 import { QUOTE_MINTS, WSOL_MINT } from "./mints";
 import type { SolPriceHistory } from "./solPrice";
@@ -135,11 +135,8 @@ async function read(
   },
 ): Promise<{ data: RawTx[]; paginationToken?: string; ok: boolean }> {
   try {
-    const res = await fetch(config.rpcUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      signal: AbortSignal.timeout(25_000),
-      body: JSON.stringify({
+    const body = await rpcSend(
+      {
         jsonrpc: "2.0",
         id: "candles",
         method: "getTransactionsForAddress",
@@ -154,13 +151,13 @@ async function read(
             ...(opts.paginationToken ? { paginationToken: opts.paginationToken } : {}),
           },
         ],
-      }),
-    });
-    if (!res.ok) return { data: [], ok: false };
-    const body = (await res.json()) as {
-      result?: { data?: RawTx[]; paginationToken?: string };
-      error?: unknown;
-    };
+      },
+      25_000,
+    );
+    if (!body) return { data: [], ok: false };
+    const result = body.result as
+      | { data?: RawTx[]; paginationToken?: string }
+      | undefined;
     /**
      * An empty answer and a failed one are NOT the same thing, and conflating
      * them is how a chart grows flat bars. A window that genuinely had no
@@ -170,8 +167,8 @@ async function read(
      */
     if (body.error) return { data: [], ok: false };
     return {
-      data: body.result?.data ?? [],
-      paginationToken: body.result?.paginationToken,
+      data: result?.data ?? [],
+      paginationToken: result?.paginationToken,
       ok: true,
     };
   } catch {

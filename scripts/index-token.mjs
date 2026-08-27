@@ -20,7 +20,7 @@
  *   --retries N    attempts per step before giving up (default 3)
  *   --help         this text
  *
- * A failed step is retried with a pause between attempts, because Helius rate
+ * A failed step is retried with a pause between attempts, because RPC rate
  * limits are common on a long run and every one of them is transient. The
  * script exits non-zero when any step still failed; the summary at the end
  * says exactly what was built and what was not.
@@ -122,12 +122,15 @@ for (const bad of uniqueMints.filter((m) => !isAddress(m))) fail(`not a Solana a
 for (const bad of [...new Set(named)].filter((w) => !isAddress(w))) fail(`--wallets: not a Solana address: ${bad}`);
 for (const bad of [...new Set(pinned)].filter((w) => !isAddress(w))) fail(`--include: not a Solana address: ${bad}`);
 
-if (!process.env.HELIUS_API_KEY) {
-  console.error("HELIUS_API_KEY is not set. Put it in .env.local.");
+const jiti = createJiti(import.meta.url);
+try {
+  const { resolveRpcUrl } = await jiti.import(path.join(root, "src/server/config.ts"));
+  resolveRpcUrl();
+} catch (error) {
+  console.error(`index-token: ${error instanceof Error ? error.message : error}`);
   process.exit(1);
 }
 
-const jiti = createJiti(import.meta.url);
 const engine = await jiti.import(path.join(root, "src/server/history.ts"));
 
 const shared = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -199,7 +202,7 @@ function short(address) {
 /**
  * One unit of work, timed, retried, and reported in place.
  *
- * Helius answers 429 under sustained reads and the occasional connection dies
+ * The RPC answers 429 under sustained reads and the occasional connection dies
  * mid-flight; both clear on their own, so each attempt waits a little longer
  * than the last before the error is finally allowed to stand.
  */

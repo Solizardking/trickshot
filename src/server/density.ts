@@ -1,5 +1,5 @@
-import { config } from "./config";
 import { tradeFilter } from "./pool";
+import { rpcSend } from "./rpc";
 
 /**
  * How busy the book was, minute by minute, before anything is fetched.
@@ -34,31 +34,24 @@ async function probe(
   from: number,
 ): Promise<{ t: number; rate: number }> {
   try {
-    const res = await fetch(config.rpcUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      signal: AbortSignal.timeout(20_000),
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: "density",
-        method: "getTransactionsForAddress",
-        params: [
-          pool,
-          {
-            transactionDetails: "signatures",
-            sortOrder: "asc",
-            limit: 1_000,
-            maxSupportedTransactionVersion: 0,
-            filters: { ...tradeFilter(mint), blockTime: { gte: from } },
-          },
-        ],
-      }),
+    const body = await rpcSend({
+      jsonrpc: "2.0",
+      id: "density",
+      method: "getTransactionsForAddress",
+      params: [
+        pool,
+        {
+          transactionDetails: "signatures",
+          sortOrder: "asc",
+          limit: 1_000,
+          maxSupportedTransactionVersion: 0,
+          filters: { ...tradeFilter(mint), blockTime: { gte: from } },
+        },
+      ],
     });
-    if (!res.ok) return { t: from, rate: 0 };
-    const body = (await res.json()) as {
-      result?: { data?: { blockTime?: number }[] };
-    };
-    const data = body.result?.data ?? [];
+    if (!body) return { t: from, rate: 0 };
+    const result = body.result as { data?: { blockTime?: number }[] } | undefined;
+    const data = result?.data ?? [];
     if (data.length < 2) return { t: from, rate: 0 };
     const span = (data[data.length - 1]?.blockTime ?? 0) - (data[0]?.blockTime ?? 0);
     // A thousand signatures inside one second is a burst, not a rate anything
@@ -139,34 +132,29 @@ export async function countSwaps(
 
   for (let page = 0; page <= Math.ceil(ceiling / 1_000); page += 1) {
     try {
-      const res = await fetch(config.rpcUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        signal: AbortSignal.timeout(20_000),
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: "count",
-          method: "getTransactionsForAddress",
-          params: [
-            pool,
-            {
-              transactionDetails: "signatures",
-              sortOrder: "asc",
-              limit: 1_000,
-              maxSupportedTransactionVersion: 0,
-              filters: { ...tradeFilter(mint), blockTime: { gte: from, lt: to } },
-              ...(token ? { paginationToken: token } : {}),
-            },
-          ],
-        }),
+      const body = await rpcSend({
+        jsonrpc: "2.0",
+        id: "count",
+        method: "getTransactionsForAddress",
+        params: [
+          pool,
+          {
+            transactionDetails: "signatures",
+            sortOrder: "asc",
+            limit: 1_000,
+            maxSupportedTransactionVersion: 0,
+            filters: { ...tradeFilter(mint), blockTime: { gte: from, lt: to } },
+            ...(token ? { paginationToken: token } : {}),
+          },
+        ],
       });
-      if (!res.ok) return { count, complete: false };
-      const body = (await res.json()) as {
-        result?: { data?: unknown[]; paginationToken?: string };
-      };
-      const data = body.result?.data ?? [];
+      if (!body) return { count, complete: false };
+      const result = body.result as
+        | { data?: unknown[]; paginationToken?: string }
+        | undefined;
+      const data = result?.data ?? [];
       count += data.length;
-      token = body.result?.paginationToken;
+      token = result?.paginationToken;
       if (!token || data.length === 0) return { count, complete: true };
     } catch {
       return { count, complete: false };

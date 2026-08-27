@@ -6,12 +6,12 @@
  * paste your own address and pick from what comes back rather than hunting
  * for mint addresses at all.
  *
- * Served through the same Helius endpoint the rest of the app reads, using
+ * Served through the same JSON-RPC endpoint the rest of the app reads, using
  * DAS `searchAssets` filtered to fungible tokens: NFTs are positions too, but
  * they have no pool to rebuild a chart from, so listing them here would only
  * invite clicks that go nowhere.
  */
-import { config } from "@/server/config";
+import { rpcSend } from "@/server/rpc";
 
 /** One fungible position, already converted out of its raw units. */
 export interface WalletHolding {
@@ -40,36 +40,31 @@ export async function walletTokens(address: string): Promise<WalletTokens> {
 
   try {
     for (let page = 1; page <= MAX_PAGES; page++) {
-      const res = await fetch(config.rpcUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        signal: AbortSignal.timeout(20_000),
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: "wallet",
-          method: "searchAssets",
-          params: {
-            ownerAddress: address,
-            tokenType: "fungible",
-            displayOptions: { showCollectionMetadata: false },
-            sortBy: { sortBy: "recent_action", sortDirection: "desc" },
-            page,
-            limit: PAGE_LIMIT,
-          },
-        }),
+      const body = await rpcSend({
+        jsonrpc: "2.0",
+        id: "wallet",
+        method: "searchAssets",
+        params: {
+          ownerAddress: address,
+          tokenType: "fungible",
+          displayOptions: { showCollectionMetadata: false },
+          sortBy: { sortBy: "recent_action", sortDirection: "desc" },
+          page,
+          limit: PAGE_LIMIT,
+        },
       });
-      if (!res.ok) throw new Error(`Helius answered ${res.status}`);
+      if (!body) throw new Error("RPC searchAssets failed");
 
       /**
        * The DAS index has shipped this payload at the top level, under
        * `assets`, and under `result` depending on the era; accept all three
        * rather than bet the page on which one today's is.
        */
-      const body = (await res.json()) as {
+      const pageBody = body as {
         result?: AssetsPage;
         assets?: AssetsPage;
       };
-      const found = body.result ?? body.assets ?? {};
+      const found = pageBody.result ?? pageBody.assets ?? {};
       for (const asset of found.items ?? []) {
         const info = asset.token_info;
         const raw = Number(info?.balance ?? info?.supply ?? 0);

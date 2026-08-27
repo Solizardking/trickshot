@@ -1,15 +1,88 @@
 /**
- * Everything this app needs from the environment, which is one key.
+ * Everything this app needs from the environment.
  *
- * The replay reads the chain and nothing else — no stream, no database, no
- * notifications — so the whole configuration is the Helius endpoint it reads
- * from. The key is read lazily rather than at module load so that importing
- * this from a route that never calls it cannot break the build.
+ * JSON-RPC reads Solana Tracker (`api_key` on a `*.solanatracker.io` host).
+ * Wallet-identity REST still uses a Helius key when present — that call is
+ * not JSON-RPC. Values are read lazily so importing this from a route that
+ * never calls it cannot break the build.
  */
+function env(name: string): string {
+  return (process.env[name] ?? "").trim();
+}
+
 function required(name: string): string {
-  const value = process.env[name];
+  const value = env(name);
   if (!value) throw new Error(`Missing required env var ${name}`);
   return value;
+}
+
+function trackerRpcKey(): string {
+  return (
+    env("SOLANA_TRACKER_ACCESS_KEY") ||
+    env("SOLANA_TRACKER_API_KEY") ||
+    env("SOLANATRACKER_API_KEY") ||
+    env("TRACKER_API_KEY")
+  );
+}
+
+function isTrackerRpcUrl(raw: string): boolean {
+  try {
+    const host = new URL(raw).hostname.toLowerCase();
+    return host === "solanatracker.io" || host.endsWith(".solanatracker.io");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Authenticate a Tracker JSON-RPC URL with `api_key`. Never leave Helius
+ * `api-key` on the query string — Tracker rejects that name.
+ */
+function withTrackerApiKey(raw: string, key: string): string {
+  const url = new URL(raw);
+  const existing =
+    url.searchParams.get("api_key") || url.searchParams.get("api-key") || key;
+  url.searchParams.delete("api-key");
+  if (existing) url.searchParams.set("api_key", existing);
+  return url.toString();
+}
+
+/**
+ * The JSON-RPC endpoint this app posts to.
+ *
+ * Prefer a dedicated `*.secure.rpc.solanatracker.io` host (`SECURE_RPC_URL`),
+ * then an explicit `SOLANA_TRACKER_RPC_URL`, then the shared Tracker host
+ * built from a Tracker API key. Tracker credentials are enough; a Helius
+ * key is not required. Helius is only a fallback when no Tracker env is set.
+ */
+export function resolveRpcUrl(): string {
+  const key = trackerRpcKey();
+  const dedicated = env("SECURE_RPC_URL");
+  const explicit = env("SOLANA_TRACKER_RPC_URL");
+
+  if (dedicated && isTrackerRpcUrl(dedicated)) {
+    return withTrackerApiKey(dedicated, key);
+  }
+  if (explicit && isTrackerRpcUrl(explicit)) {
+    return withTrackerApiKey(explicit, key);
+  }
+  if (key) {
+    return withTrackerApiKey("https://rpc-mainnet.solanatracker.io/", key);
+  }
+
+  const heliusUrl = env("HELIUS_RPC_URL");
+  const heliusKey = env("HELIUS_API_KEY");
+  if (heliusUrl || heliusKey) {
+    const url = new URL(heliusUrl || "https://mainnet.helius-rpc.com");
+    if (heliusKey && !url.searchParams.has("api-key")) {
+      url.searchParams.set("api-key", heliusKey);
+    }
+    return url.toString();
+  }
+
+  throw new Error(
+    "Missing Solana Tracker RPC credentials. Set SOLANA_TRACKER_RPC_URL, SECURE_RPC_URL, or SOLANA_TRACKER_API_KEY / SOLANA_TRACKER_ACCESS_KEY.",
+  );
 }
 
 /**
@@ -26,17 +99,12 @@ export function readOnly(): boolean {
 }
 
 export const config = {
-  /** The raw key, for the REST endpoints that are not JSON-RPC. */
+  /** The raw Helius key, for the wallet-identity REST endpoint only. */
   get apiKey(): string {
     return required("HELIUS_API_KEY");
   },
   get rpcUrl(): string {
-    const base = process.env.HELIUS_RPC_URL ?? "https://mainnet.helius-rpc.com";
-    const url = new URL(base);
-    if (!url.searchParams.has("api-key")) {
-      url.searchParams.set("api-key", required("HELIUS_API_KEY"));
-    }
-    return url.toString();
+    return resolveRpcUrl();
   },
   commitment: (process.env.COMMITMENT ?? "confirmed") as
     | "processed"
