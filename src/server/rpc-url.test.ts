@@ -56,7 +56,7 @@ describe("trickshot JSON-RPC uses Solana Tracker", () => {
       "https://mainnet.helius-rpc.com/?api-key=helius-should-be-ignored";
     const url = new URL(config.rpcUrl);
     expect(url.hostname).toBe("example.secure.rpc.solanatracker.io");
-    expect(url.searchParams.get("api_key")).toBe("access-key");
+    expect(url.searchParams.has("api_key")).toBe(false);
     expect(url.searchParams.has("api-key")).toBe(false);
     expect(config.rpcUrl).not.toMatch(/helius-rpc\.com/i);
   });
@@ -70,6 +70,16 @@ describe("trickshot JSON-RPC uses Solana Tracker", () => {
     expect(url.searchParams.get("api_key")).toBe("from-url");
     expect(url.searchParams.has("api-key")).toBe(false);
     expect(url.href).not.toMatch(/helius-rpc\.com/i);
+  });
+
+  it("strips api_key from a dedicated Secure RPC host", () => {
+    isolate();
+    process.env.SECURE_RPC_URL =
+      "https://example.secure.rpc.solanatracker.io/?api_key=must-not-stick";
+    const url = new URL(resolveRpcUrl());
+    expect(url.hostname).toBe("example.secure.rpc.solanatracker.io");
+    expect(url.searchParams.has("api_key")).toBe(false);
+    expect(url.searchParams.has("api-key")).toBe(false);
   });
 
   it("strips Helius api-key from a Tracker URL", () => {
@@ -130,6 +140,7 @@ describe("trickshot JSON-RPC uses Solana Tracker", () => {
       "pool.ts",
       "rpc.ts",
       "config.ts",
+      "addressHistory.ts",
     ];
     for (const name of files) {
       const src = fs.readFileSync(path.join(dir, name), "utf8");
@@ -142,8 +153,14 @@ describe("trickshot JSON-RPC uses Solana Tracker", () => {
       if (name !== "rpc.ts") {
         expect(src, name).not.toMatch(/fetch\(\s*config\.rpcUrl/);
       }
+      if (name !== "addressHistory.ts") {
+        expect(src, name).not.toMatch(/method:\s*"getTransactionsForAddress"/);
+      }
     }
     const rpcSrc = fs.readFileSync(path.join(dir, "rpc.ts"), "utf8");
     expect(rpcSrc).toMatch(/fetch\(\s*config\.rpcUrl/);
+    const cli = fs.readFileSync(path.join(dir, "../../scripts/index-token.mjs"), "utf8");
+    expect(cli).toMatch(/resolveRpcUrl/);
+    expect(cli).not.toMatch(/if\s*\(\s*!process\.env\.HELIUS_API_KEY\s*\)/);
   });
 });

@@ -26,6 +26,7 @@ import {
   tradeFilter,
   type Venue,
 } from "./pool";
+import { addressTransactions } from "./addressHistory";
 import { rpcPost } from "./rpc";
 import {
   builtTokens,
@@ -267,25 +268,14 @@ async function archive(
   /** "signatures" costs ten credits flat and a fraction of the bytes. */
   transactionDetails: "full" | "signatures" = "full",
 ): Promise<{ data: unknown[]; paginationToken?: string } | null> {
-  // Through the shared gate: a board build fires several hundred of these,
-  // and ungated they answered 429, which read as an empty page.
-  return rpcPost({
-    jsonrpc: "2.0",
-    id: "history",
-    method: "getTransactionsForAddress",
-    // POSITIONAL params. The documented object form is rejected outright.
-    params: [
-      address,
-      {
-        transactionDetails,
-        sortOrder,
-        limit,
-        maxSupportedTransactionVersion: 0,
-        ...(filters ? { filters } : {}),
-        ...(paginationToken ? { paginationToken } : {}),
-      },
-    ],
-  }, 25_000);
+  return addressTransactions({
+    address,
+    transactionDetails,
+    sortOrder,
+    limit,
+    filters,
+    paginationToken,
+  });
 }
 
 /**
@@ -482,6 +472,7 @@ function priceLookup(candles: Candle[], interval: number): (ts: number) => numbe
 }
 
 function decodeBase58(value: string): Buffer {
+  if (typeof value !== "string" || value.length === 0) return Buffer.alloc(0);
   try {
     return Buffer.from(bs58.decode(value));
   } catch {
@@ -596,15 +587,17 @@ const venues = new Map<string, { at: number; venue: Venue | null }>();
 /** A pool that was the busiest yesterday still is. A day is safe and useful. */
 const VENUE_TTL = Number(process.env.HISTORY_VENUE_TTL ?? 24 * 3_600);
 
-async function venueFor(mint: string): Promise<Venue | null> {
-  const hit = venues.get(mint);
-  if (hit && Date.now() - hit.at < CACHE_MS) return hit.venue;
-
+async function venueFor(mint: string, force = false): Promise<Venue | null> {
   const key = `venue:${mint}`;
-  const stored = await loadBlob<{ at: number; venue: Venue }>(key);
-  if (stored && nowSec() - stored.at < VENUE_TTL) {
-    venues.set(mint, { at: Date.now(), venue: stored.venue });
-    return stored.venue;
+  if (!force) {
+    const hit = venues.get(mint);
+    if (hit && Date.now() - hit.at < CACHE_MS) return hit.venue;
+
+    const stored = await loadBlob<{ at: number; venue: Venue }>(key);
+    if (stored && nowSec() - stored.at < VENUE_TTL) {
+      venues.set(mint, { at: Date.now(), venue: stored.venue });
+      return stored.venue;
+    }
   }
 
   const venue = await pickVenue(mint);
@@ -627,11 +620,11 @@ async function poolLifespan(
 ): Promise<{ first: number; last: number } | null> {
   const filters = tradeFilter(mint);
   const [oldest, newest] = await Promise.all([
-    archive(venue.pool, undefined, "asc", filters, 1),
-    archive(venue.pool, undefined, "desc", filters, 1),
+    archive(venue.pool, undefined, "asc", filters, 1, "signatures"),
+    archive(venue.pool, undefined, "desc", filters, 1, "signatures"),
   ]);
-  const first = adapt(oldest?.data?.[0])?.blockTime ?? 0;
-  const last = adapt(newest?.data?.[0])?.blockTime ?? 0;
+  const first = (oldest?.data?.[0] as { blockTime?: number } | undefined)?.blockTime ?? 0;
+  const last = (newest?.data?.[0] as { blockTime?: number } | undefined)?.blockTime ?? 0;
   return first > 0 && last >= first ? { first, last } : null;
 }
 
@@ -1340,8 +1333,9 @@ export async function reconstruct(
    * fetching a transaction. MEASURED, the first two steps together are about a
    * second and a half for a token with 1.8 million swaps behind it.
    */
-  const venue = await stage("venue", () => venueFor(mint));
-  if (!venue) return null;
+  const found = await stage("venue", () => venueFor(mint));
+  if (!found) return null;
+  let venue: Venue = found;
 
   let life = await stage("lifespan", () => poolLifespan(venue, mint));
   if (!life) {
@@ -1369,9 +1363,27 @@ export async function reconstruct(
   // The whole-life map is worth its forty probes here: it is what tells the
   // page how many swaps the token has ever had.
   const density = await stage("density", () => densityMap(venue.pool, mint, firstTs, lastTs));
-  const drawn = await stage("candles", () =>
+  let drawn = await stage("candles", () =>
     series(venue, mint, firstTs, Math.min(lastTs, nowSec()) + interval, interval, sol),
   );
+  if (drawn.candles.length === 0) {
+    const retry = await stage("venue-retry", () => venueFor(mint, true));
+    if (retry && retry.pool !== venue.pool) {
+      venue = retry;
+      const retryLife = await stage("lifespan-retry", () => poolLifespan(retry, mint));
+      const span = retryLife ?? life;
+      drawn = await stage("candles-retry", () =>
+        series(
+          retry,
+          mint,
+          span.first,
+          Math.min(span.last, nowSec()) + pickInterval(span.last - span.first),
+          pickInterval(span.last - span.first),
+          sol,
+        ),
+      );
+    }
+  }
   if (drawn.candles.length === 0) return null;
 
   const [token, supply] = await Promise.all([

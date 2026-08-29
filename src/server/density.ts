@@ -1,5 +1,5 @@
+import { listSignatures } from "./addressHistory";
 import { tradeFilter } from "./pool";
-import { rpcSend } from "./rpc";
 
 /**
  * How busy the book was, minute by minute, before anything is fetched.
@@ -28,62 +28,37 @@ export interface Density {
   total: number;
 }
 
-async function probe(
-  pool: string,
-  mint: string,
-  from: number,
-): Promise<{ t: number; rate: number }> {
-  try {
-    const body = await rpcSend({
-      jsonrpc: "2.0",
-      id: "density",
-      method: "getTransactionsForAddress",
-      params: [
-        pool,
-        {
-          transactionDetails: "signatures",
-          sortOrder: "asc",
-          limit: 1_000,
-          maxSupportedTransactionVersion: 0,
-          filters: { ...tradeFilter(mint), blockTime: { gte: from } },
-        },
-      ],
-    });
-    if (!body) return { t: from, rate: 0 };
-    const result = body.result as { data?: { blockTime?: number }[] } | undefined;
-    const data = result?.data ?? [];
-    if (data.length < 2) return { t: from, rate: 0 };
-    const span = (data[data.length - 1]?.blockTime ?? 0) - (data[0]?.blockTime ?? 0);
-    // A thousand signatures inside one second is a burst, not a rate anything
-    // can be planned from; treat the probe's own resolution as the floor.
-    return { t: from, rate: span > 0 ? data.length / span : data.length };
-  } catch {
-    return { t: from, rate: 0 };
-  }
-}
-
 export async function densityMap(
   pool: string,
   mint: string,
   first: number,
   last: number,
   /**
-   * Probes to spend. Scaled by the caller to the work being planned: mapping a
+   * Bins to spend. Scaled by the caller to the work being planned: mapping a
    * token's whole life is worth forty, and deciding how to draw the six bars a
-   * cached chart is missing is not — that cost 400ms of every warm request to
-   * plan 800ms of fetching.
+   * cached chart is missing is not.
    */
   probes: number = PROBES,
 ): Promise<Density> {
   const span = Math.max(last - first, 1);
   const count = Math.max(1, Math.min(probes, PROBES));
   const step = span / count;
-  const points = await Promise.all(
-    Array.from({ length: count }, (_, i) => probe(pool, mint, Math.floor(first + i * step))),
-  );
-  points.sort((a, b) => a.t - b.t);
-  const total = points.reduce((sum, p) => sum + p.rate * step, 0);
-  return { points, total };
+  const sigs = await listSignatures(pool, {
+    ...tradeFilter(mint),
+    blockTime: { gte: first, lt: last + 1 },
+  });
+  const bins = Array.from({ length: count }, (_, i) => ({
+    t: Math.floor(first + i * step),
+    n: 0,
+  }));
+  for (const sig of sigs) {
+    const t = sig.blockTime ?? 0;
+    const i = Math.min(count - 1, Math.max(0, Math.floor((t - first) / step)));
+    const bin = bins[i];
+    if (bin) bin.n += 1;
+  }
+  const points = bins.map((b) => ({ t: b.t, rate: b.n / step }));
+  return { points, total: sigs.length };
 }
 
 /**
@@ -127,38 +102,10 @@ export async function countSwaps(
   to: number,
   ceiling: number,
 ): Promise<{ count: number; complete: boolean }> {
-  let count = 0;
-  let token: string | undefined;
-
-  for (let page = 0; page <= Math.ceil(ceiling / 1_000); page += 1) {
-    try {
-      const body = await rpcSend({
-        jsonrpc: "2.0",
-        id: "count",
-        method: "getTransactionsForAddress",
-        params: [
-          pool,
-          {
-            transactionDetails: "signatures",
-            sortOrder: "asc",
-            limit: 1_000,
-            maxSupportedTransactionVersion: 0,
-            filters: { ...tradeFilter(mint), blockTime: { gte: from, lt: to } },
-            ...(token ? { paginationToken: token } : {}),
-          },
-        ],
-      });
-      if (!body) return { count, complete: false };
-      const result = body.result as
-        | { data?: unknown[]; paginationToken?: string }
-        | undefined;
-      const data = result?.data ?? [];
-      count += data.length;
-      token = result?.paginationToken;
-      if (!token || data.length === 0) return { count, complete: true };
-    } catch {
-      return { count, complete: false };
-    }
-  }
-  return { count, complete: false };
+  const sigs = await listSignatures(pool, {
+    ...tradeFilter(mint),
+    blockTime: { gte: from, lt: to },
+  });
+  if (sigs.length > ceiling) return { count: ceiling, complete: false };
+  return { count: sigs.length, complete: true };
 }

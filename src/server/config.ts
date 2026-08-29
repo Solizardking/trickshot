@@ -34,12 +34,22 @@ function isTrackerRpcUrl(raw: string): boolean {
   }
 }
 
+function isSecureTrackerHost(host: string): boolean {
+  return /\.secure\.rpc\.solanatracker\.io$/i.test(host);
+}
+
 /**
- * Authenticate a Tracker JSON-RPC URL with `api_key`. Never leave Helius
- * `api-key` on the query string — Tracker rejects that name.
+ * Shared Tracker RPC authenticates with `api_key`. Dedicated Secure RPC
+ * hosts reject that query param (HTTP 400) and authenticate by subdomain,
+ * so never attach `api_key` there. Never leave Helius `api-key` on either.
  */
-function withTrackerApiKey(raw: string, key: string): string {
+function withTrackerAuth(raw: string, key: string): string {
   const url = new URL(raw);
+  if (isSecureTrackerHost(url.hostname)) {
+    url.searchParams.delete("api-key");
+    url.searchParams.delete("api_key");
+    return url.toString();
+  }
   const existing =
     url.searchParams.get("api_key") || url.searchParams.get("api-key") || key;
   url.searchParams.delete("api-key");
@@ -61,13 +71,13 @@ export function resolveRpcUrl(): string {
   const explicit = env("SOLANA_TRACKER_RPC_URL");
 
   if (dedicated && isTrackerRpcUrl(dedicated)) {
-    return withTrackerApiKey(dedicated, key);
+    return withTrackerAuth(dedicated, key);
   }
   if (explicit && isTrackerRpcUrl(explicit)) {
-    return withTrackerApiKey(explicit, key);
+    return withTrackerAuth(explicit, key);
   }
   if (key) {
-    return withTrackerApiKey("https://rpc-mainnet.solanatracker.io/", key);
+    return withTrackerAuth("https://rpc-mainnet.solanatracker.io/", key);
   }
 
   const heliusUrl = env("HELIUS_RPC_URL");

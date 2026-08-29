@@ -1,5 +1,9 @@
+import {
+  addressTransactions,
+  listSignatures,
+  transactionsBySignature,
+} from "./addressHistory";
 import { countSwaps, expectedSwaps, type Density } from "./density";
-import { rpcSend } from "./rpc";
 import { accountKeys, tradeFilter, type TokenBalanceRow, type Venue } from "./pool";
 import { QUOTE_MINTS, WSOL_MINT } from "./mints";
 import type { SolPriceHistory } from "./solPrice";
@@ -135,40 +139,18 @@ async function read(
   },
 ): Promise<{ data: RawTx[]; paginationToken?: string; ok: boolean }> {
   try {
-    const body = await rpcSend(
-      {
-        jsonrpc: "2.0",
-        id: "candles",
-        method: "getTransactionsForAddress",
-        params: [
-          pool,
-          {
-            transactionDetails: "full",
-            sortOrder: opts.order ?? "asc",
-            limit: opts.limit,
-            maxSupportedTransactionVersion: 0,
-            filters: { ...tradeFilter(mint), blockTime: { gte: opts.from, lt: opts.to } },
-            ...(opts.paginationToken ? { paginationToken: opts.paginationToken } : {}),
-          },
-        ],
-      },
-      25_000,
-    );
-    if (!body) return { data: [], ok: false };
-    const result = body.result as
-      | { data?: RawTx[]; paginationToken?: string }
-      | undefined;
-    /**
-     * An empty answer and a failed one are NOT the same thing, and conflating
-     * them is how a chart grows flat bars. A window that genuinely had no
-     * trades is a flat bar; a window whose request failed is a hole, and the
-     * difference has to survive up to the caller so it can retry and refuse to
-     * cache what it could not read.
-     */
-    if (body.error) return { data: [], ok: false };
+    const result = await addressTransactions({
+      address: pool,
+      transactionDetails: "full",
+      sortOrder: opts.order ?? "asc",
+      limit: opts.limit,
+      filters: { ...tradeFilter(mint), blockTime: { gte: opts.from, lt: opts.to } },
+      paginationToken: opts.paginationToken,
+    });
+    if (!result) return { data: [], ok: false };
     return {
-      data: result?.data ?? [],
-      paginationToken: result?.paginationToken,
+      data: (result.data ?? []) as RawTx[],
+      paginationToken: result.paginationToken,
       ok: true,
     };
   } catch {
@@ -578,6 +560,44 @@ export async function buildCandles(
           suspect: [],
         };
       }
+    }
+  }
+
+  /**
+   * Tracker (and standard RPC) cannot return a window of full txs in one
+   * call. Sampling every bar with getTransaction 429s the key. Spread a
+   * fixed budget of fetches across the signature log instead.
+   */
+  const SAMPLE = Number(process.env.HISTORY_SAMPLE_TXS ?? 200);
+  const sigs = await listSignatures(venue.pool, {
+    ...tradeFilter(mint),
+    blockTime: { gte: from, lt: to },
+  });
+  if (sigs.length > 0) {
+    const step = Math.max(1, Math.ceil(sigs.length / SAMPLE));
+    const picked = sigs.filter((_, i) => i % step === 0).slice(0, SAMPLE);
+    const tSample = Date.now();
+    const txs = await transactionsBySignature(picked.map((s) => s.signature));
+    const sampled: Swap[] = [];
+    for (const raw of txs) {
+      const swap = priceSwap(raw as RawTx, venue, mint, sol);
+      if (swap) sampled.push(swap);
+    }
+    sampled.sort((a, b) => a.ts - b.ts);
+    if (DEBUG) {
+      console.log(
+        `[candles] sampled ${sampled.length}/${picked.length} txs in ${Date.now() - tSample}ms`,
+      );
+    }
+    if (sampled.length > 0) {
+      return {
+        candles: toCandles(sampled, from, to, interval),
+        exact: false,
+        swaps: sampled,
+        read: sampled.length,
+        estimated: sigs.length,
+        suspect: [],
+      };
     }
   }
 

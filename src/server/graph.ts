@@ -1,4 +1,5 @@
 import { isProgramDerived } from "./address";
+import { addressTransactions } from "./addressHistory";
 import type { NormalizedTx } from "./decode/normalizeTx";
 import { identify } from "./identity";
 import { WSOL_MINT } from "./mints";
@@ -230,20 +231,14 @@ async function contextTransactions(
   const out: unknown[] = [];
   let token: string | undefined;
   for (let page = 0; page < CONTEXT_PAGES; page += 1) {
-    const res = await rpc<{ data?: unknown[]; paginationToken?: string }>(
-      "getTransactionsForAddress",
-      [
-        wallet,
-        {
-          transactionDetails: "full",
-          sortOrder: "asc",
-          limit: 1_000,
-          maxSupportedTransactionVersion: 0,
-          filters: { status: "succeeded", blockTime: { gte: from, lt: to } },
-          ...(token ? { paginationToken: token } : {}),
-        },
-      ],
-    );
+    const res = await addressTransactions({
+      address: wallet,
+      transactionDetails: "full",
+      sortOrder: "asc",
+      limit: 1_000,
+      filters: { status: "succeeded", blockTime: { gte: from, lt: to } },
+      paginationToken: token,
+    });
     const data = res?.data ?? [];
     out.push(...data);
     token = res?.paginationToken;

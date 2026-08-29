@@ -9,8 +9,15 @@ import bs58 from "bs58";
  */
 
 /** Raw pubkey bytes; the rest of the app wants base58. */
-export function toBase58(value: Uint8Array | Buffer | string): string {
-  return typeof value === "string" ? value : bs58.encode(value);
+export function toBase58(
+  value: Uint8Array | Buffer | string | { pubkey?: string },
+): string {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && "pubkey" in value && typeof value.pubkey === "string") {
+    return value.pubkey;
+  }
+  if (value instanceof Uint8Array || Buffer.isBuffer(value)) return bs58.encode(value);
+  return "";
 }
 
 export function toBuffer(value: Uint8Array | Buffer | string): Buffer {

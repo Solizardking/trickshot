@@ -1,5 +1,6 @@
 import { isProgramDerived } from "./address";
 import { WSOL_MINT } from "./mints";
+import { addressTransactions } from "./addressHistory";
 import { rpcPost } from "./rpc";
 
 /**
@@ -106,23 +107,19 @@ async function swapRate(
   pool: string,
   mint: string,
 ): Promise<{ rate: number; sample: unknown[] }> {
-  const res = await rpc<{ data?: { blockTime?: number }[] }>(
-    "getTransactionsForAddress",
-    [
-      pool,
-      {
-        transactionDetails: "signatures",
-        sortOrder: "desc",
-        limit: 1_000,
-        maxSupportedTransactionVersion: 0,
-        filters: tradeFilter(mint),
-      },
-    ],
-  );
-  const data = res?.data ?? [];
+  const res = await addressTransactions({
+    address: pool,
+    transactionDetails: "signatures",
+    sortOrder: "desc",
+    limit: 1_000,
+    filters: tradeFilter(mint),
+  });
+  const data = (res?.data ?? []) as { blockTime?: number }[];
   if (data.length < 2) return { rate: 0, sample: data };
   const span = (data[0]?.blockTime ?? 0) - (data[data.length - 1]?.blockTime ?? 0);
-  return { rate: span > 0 ? data.length / span : 0, sample: data };
+  // A handful of txs in a few seconds is a PDA that barely moved, not a book.
+  if (span < 60) return { rate: 0, sample: data };
+  return { rate: data.length / span, sample: data };
 }
 
 /**
@@ -137,16 +134,63 @@ async function swapRate(
  */
 export async function pickVenue(mint: string): Promise<Venue | null> {
   const venues = await discoverVenues(mint);
-  if (venues.length === 0) return null;
-
   const ranked = await Promise.all(
-    venues.map(async (v) => ({ ...v, rate: (await swapRate(v.pool, mint)).rate })),
+    venues.map(async (v) => {
+      const { rate, sample } = await swapRate(v.pool, mint);
+      return { ...v, rate, samples: sample.length };
+    }),
   );
-  ranked.sort((a, b) => b.rate - a.rate);
-  const best = ranked[0];
-  if (!best || best.rate === 0) return null;
+  ranked.sort((a, b) => b.samples - a.samples || b.rate - a.rate);
 
-  return (await resolveQuote(best, mint)) ?? best;
+  for (const candidate of ranked) {
+    if (candidate.samples < 2) continue;
+    const resolved = await resolveQuote(candidate, mint);
+    if (resolved) return resolved;
+  }
+
+  return venueFromMintTxs(mint);
+}
+
+/**
+ * Infer the book from the mint's own transactions when holder PDAs did not
+ * look like a market. Counts which program-owned token account actually moved.
+ */
+async function venueFromMintTxs(mint: string): Promise<Venue | null> {
+  const res = await addressTransactions({
+    address: mint,
+    transactionDetails: "full",
+    sortOrder: "desc",
+    limit: 50,
+    filters: { status: "succeeded" },
+  });
+  const votes = new Map<string, { vault: string; n: number }>();
+  for (const raw of res?.data ?? []) {
+    const tx = raw as {
+      meta?: {
+        preTokenBalances?: TokenBalanceRow[];
+        postTokenBalances?: TokenBalanceRow[];
+        loadedAddresses?: { writable?: string[]; readonly?: string[] };
+      };
+      transaction?: { message?: { accountKeys?: (string | { pubkey: string })[] } };
+    };
+    const keys = accountKeys(tx);
+    const pre = tx.meta?.preTokenBalances ?? [];
+    const post = tx.meta?.postTokenBalances ?? [];
+    for (const after of post) {
+      if (after.mint !== mint || !after.owner || !isProgramDerived(after.owner)) continue;
+      const before = pre.find((p) => p.accountIndex === after.accountIndex);
+      if (after.uiTokenAmount.amount === (before?.uiTokenAmount.amount ?? "0")) continue;
+      const vault = keys[after.accountIndex];
+      if (!vault) continue;
+      const held = votes.get(after.owner) ?? { vault, n: 0 };
+      held.n += 1;
+      votes.set(after.owner, held);
+    }
+  }
+  const best = [...votes.entries()].sort((a, b) => b[1].n - a[1].n)[0];
+  if (!best) return null;
+  const venue: Venue = { pool: best[0], baseVault: best[1].vault, rate: best[1].n };
+  return (await resolveQuote(venue, mint)) ?? venue;
 }
 
 /**
@@ -159,16 +203,13 @@ export async function pickVenue(mint: string): Promise<Venue | null> {
  * account consistently moves opposite it.
  */
 async function resolveQuote(venue: Venue, mint: string): Promise<Venue | null> {
-  const res = await rpc<{ data?: unknown[] }>("getTransactionsForAddress", [
-    venue.pool,
-    {
-      transactionDetails: "full",
-      sortOrder: "desc",
-      limit: 8,
-      maxSupportedTransactionVersion: 0,
-      filters: tradeFilter(mint),
-    },
-  ]);
+  const res = await addressTransactions({
+    address: venue.pool,
+    transactionDetails: "full",
+    sortOrder: "desc",
+    limit: 8,
+    filters: tradeFilter(mint),
+  });
   const seen = new Map<string, { mint: string; hits: number }>();
   let nativeHits = 0;
 

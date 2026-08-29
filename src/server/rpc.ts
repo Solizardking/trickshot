@@ -88,9 +88,12 @@ export async function rpcSend(
         release();
       }
     } catch (error) {
-      console.warn(
-        `[trickshot] rpc ${String(body.method)} failed: ${error instanceof Error ? error.message : "network"}`,
-      );
+      const message = error instanceof Error ? error.message : "network";
+      console.warn(`[trickshot] rpc ${String(body.method)} failed: ${message}`);
+      if (attempt < BACKOFF_MS.length && /abort|timeout/i.test(message)) {
+        await new Promise((resolve) => setTimeout(resolve, BACKOFF_MS[attempt]));
+        continue;
+      }
       return null;
     }
 

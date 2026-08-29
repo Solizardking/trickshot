@@ -39,12 +39,13 @@ of the local directory, which is what a deployment reads from. See
 
 ## How it talks to the chain
 
-JSON-RPC goes to **Solana Tracker**, authenticated with `api_key` on a
-`*.solanatracker.io` (or `*.rpc.solanatracker.io`) host. Prefer a dedicated
-Secure RPC URL when you have one.
+JSON-RPC goes to **Solana Tracker** on a `*.solanatracker.io` (or
+`*.rpc.solanatracker.io`) host. Shared RPC authenticates with the `api_key`
+query param. Dedicated Secure RPC authenticates by subdomain — do not put
+`api_key` on those URLs. Prefer a dedicated Secure RPC URL when you have one.
 
-**`getTransactionsForAddress`** does the heavy lifting. Two details make the
-project possible at all:
+**Address history** is built from standard JSON-RPC (`getSignaturesForAddress`
+plus `getTransaction`). Two details still make the project possible at all:
 
 - `filters.blockTime` reaches a window days old directly instead of paging back
   to it, so a month-old token costs a few hundred calls rather than millions.
