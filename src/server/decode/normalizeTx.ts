@@ -1,4 +1,4 @@
-import { toBase58, toBuffer } from "./bytes";
+import { toBase58, toBuffer } from "../bytes";
 
 /**
  * Turn an archival transaction into one stable shape.

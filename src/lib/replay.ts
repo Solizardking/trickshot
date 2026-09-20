@@ -122,6 +122,9 @@ export interface TraderBoard {
  * token's whole life — and served from the cache after that, since the bars
  * behind the newest one can never change.
  */
+/** API root. The app is served under /trickshot behind the Musebook proxy. */
+const API = "/trickshot/api";
+
 export async function fetchHistory(
   mint: string,
   wallet?: string,
@@ -132,7 +135,7 @@ export async function fetchHistory(
   const query = new URLSearchParams({ mint, lead: String(lead) });
   if (wallet) query.set("wallet", wallet);
   if (alongside.length > 0) query.set("with", alongside.join(","));
-  const res = await fetch(`/api/history?${query}`, { cache: "no-store" });
+  const res = await fetch(`${API}/history?${query}`, { cache: "no-store" });
   const body = (await res.json()) as TokenHistory;
   if (!res.ok) return { ...body, error: body.error ?? `error ${res.status}` };
   return body;
@@ -152,7 +155,7 @@ export async function fetchBoard(
 ): Promise<TraderBoard | null> {
   const query = new URLSearchParams({ mint });
   if (update) query.set("update", "1");
-  const res = await fetch(`/api/board?${query}`, { cache: "no-store" });
+  const res = await fetch(`${API}/board?${query}`, { cache: "no-store" });
   const body = (await res.json()) as TraderBoard;
   if (!res.ok) return { ...body, error: body.error ?? `error ${res.status}` };
   return body;
@@ -180,7 +183,7 @@ export interface BuiltToken {
  */
 export async function fetchBuiltTokens(): Promise<BuiltToken[]> {
   try {
-    const res = await fetch("/api/tokens", { cache: "no-store" });
+    const res = await fetch(`${API}/tokens`, { cache: "no-store" });
     if (!res.ok) return [];
     return ((await res.json()) as { tokens?: BuiltToken[] }).tokens ?? [];
   } catch {
@@ -229,7 +232,7 @@ export async function fetchRelated(
   wallet: string,
 ): Promise<RelatedReport | null> {
   const query = new URLSearchParams({ mint, wallet });
-  const res = await fetch(`/api/related?${query}`, { cache: "no-store" });
+  const res = await fetch(`${API}/related?${query}`, { cache: "no-store" });
   const body = (await res.json()) as RelatedReport;
   if (!res.ok) return { ...body, error: body.error ?? `error ${res.status}` };
   return body;
@@ -254,7 +257,7 @@ export interface WalletTokens {
 /** Everything a wallet holds, so a session can start from "my own bag". */
 export async function fetchWalletTokens(wallet: string): Promise<WalletTokens | null> {
   try {
-    const res = await fetch(`/api/wallet?address=${encodeURIComponent(wallet)}`, {
+    const res = await fetch(`${API}/wallet?address=${encodeURIComponent(wallet)}`, {
       cache: "no-store",
     });
     const body = (await res.json()) as WalletTokens;

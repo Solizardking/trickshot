@@ -1,7 +1,0 @@
-# Never upload local state or secrets.
-.env*
-!.env.example
-.trickshot-cache/
-node_modules
-.next
-scripts/
