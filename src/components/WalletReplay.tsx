@@ -433,7 +433,7 @@ export function WalletReplay({
         height: 340,
         layout: {
           background: { color: "transparent" },
-          textColor: "#8a93a6",
+          textColor: "#7A8494",
           attributionLogo: false,
         },
         grid: {
@@ -471,15 +471,15 @@ export function WalletReplay({
       const series =
         mode === "candles"
           ? chart.addSeries(lwc.CandlestickSeries, {
-              upColor: "#3fd08a",
-              downColor: "#ff5c5c",
+              upColor: "#14F195",
+              downColor: "#FF754A",
               borderVisible: false,
-              wickUpColor: "#3fd08a",
-              wickDownColor: "#ff5c5c",
+              wickUpColor: "#14F195",
+              wickDownColor: "#FF754A",
               priceFormat: asCap ? capFormat : priceFormat,
             })
           : chart.addSeries(lwc.LineSeries, {
-              color: "#f0b429",
+              color: "#B08DFF",
               lineWidth: 2,
               priceFormat: asCap ? capFormat : priceFormat,
             });
@@ -582,7 +582,7 @@ export function WalletReplay({
       .map((g) => ({
         time: g.time,
         position: g.isBuy ? "belowBar" : "aboveBar",
-        color: g.isBuy ? "#3fd08a" : "#ff5c5c",
+        color: g.isBuy ? "#14F195" : "#FF754A",
         shape: "circle",
         text: labelled.has(`${g.time}:${g.isBuy}:${g.wallet ?? ""}`)
           ? label(g)
@@ -801,7 +801,7 @@ export function WalletReplay({
         const y = (34 + f.slot * 42 + 26 - rise) * k;
 
         ctx.globalAlpha = alpha;
-        ctx.fillStyle = f.isBuy ? "#35d399" : "#ff5a5a";
+        ctx.fillStyle = f.isBuy ? "#14F195" : "#FF754A";
         ctx.font = `800 ${26 * k}px ui-monospace, "JetBrains Mono", "SF Mono", monospace`;
         const head = `${usdCompact(f.usd)} ${f.isBuy ? "BUY" : "SELL"}`;
         const tail = ` (${capLabel(f.cap)}${asCap ? " MC" : ""})`;
@@ -882,7 +882,7 @@ export function WalletReplay({
           if (bg) {
             drawCover(ctx, bg.image, width, height);
           } else {
-            ctx.fillStyle = "#0a0b0d";
+            ctx.fillStyle = "#05070a";
             ctx.fillRect(0, 0, width, height);
           }
           ctx.drawImage(a.chart.takeScreenshot(), 0, 0, width, height);

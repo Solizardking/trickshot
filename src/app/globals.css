@@ -1,25 +1,25 @@
 @import "tailwindcss";
 
-/* The palette the replay was designed against, carried over intact so a
-   screen recording made here looks like one made anywhere else. Only the
-   tokens these components actually use are kept. */
+/* The Solana dark palette, carried over from the official brand spec
+   (#14F195 / #9945FF, lightness-scaled for dark UI). Only the tokens these
+   components actually use are kept. */
 @theme {
   /* base */
-  --color-ink-900: #0a0b0d;
-  --color-ink-800: #101318;
-  --color-ink-700: #161a20;
-  --color-line: #242a33; /* decorative hairline */
-  --color-line-strong: #2e3540; /* control boundaries */
+  --color-ink-900: #05070a;
+  --color-ink-800: #0b0e13;
+  --color-ink-700: #141a21;
+  --color-line: #222a33; /* decorative hairline */
+  --color-line-strong: #2e3742; /* control boundaries */
 
   /* text — tx3 is #7A8494, NOT #667080 (fails at 3.93:1) */
   --color-tx: #e8ecf2;
   --color-tx2: #98a2b0;
   --color-tx3: #7a8494;
 
-  /* accent + status */
-  --color-amber: #ffb224;
-  --color-mint: #35d399;
-  --color-signal: #ff5a5a;
+  /* accent + status — official Solana brand colors */
+  --color-amber: #9945ff; /* Solana Purple — primary accent / CTAs */
+  --color-mint: #14f195; /* Solana Green — up / positive PnL */
+  --color-signal: #ff754a; /* Solana Orange — down / negative PnL */
 
   --radius-sm: 4px;
   --radius-md: 8px;
@@ -31,6 +31,16 @@
 
 :root {
   color-scheme: dark;
+  /* Solana dark gradient, kept very quiet behind the page */
+  --solana-gradient-dark: linear-gradient(
+    135deg,
+    #3d0088 8%,
+    #300881 30%,
+    #184065 50%,
+    #184e59 60%,
+    #0d6250 72%,
+    #017343 97%
+  );
 }
 
 html {
@@ -42,6 +52,19 @@ body {
   color: var(--color-tx);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+}
+
+/* A whisper of the Solana gradient behind everything — dark enough to keep
+   chart and text contrast untouched, present enough that the app reads as
+   on-brand in a screen recording. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: var(--solana-gradient-dark);
+  opacity: 0.14;
+  pointer-events: none;
 }
 
 /* Replay effects.
